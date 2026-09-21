@@ -1,0 +1,62 @@
+require('dotenv').config();
+const assert = require('node:assert/strict');
+const { randomUUID, createHash } = require('crypto');
+const jwt = require('jsonwebtoken');
+const { prisma } = require('../config/db');
+const app = require('../index');
+const prefix = `verify-${randomUUID()}`;
+const ids = {users:[],products:[],suppliers:[],customers:[],sales:[],purchases:[]};
+let server;
+(async()=>{
+ try {
+  server=app.listen(0); await new Promise(r=>server.once('listening',r)); const base=`http://127.0.0.1:${server.address().port}/api`;
+  const admin=await prisma.user.create({data:{name:prefix,email:prefix+'@example.test',passwordHash:await require('bcryptjs').hash('TestPass123!',4),role:'ADMIN'}});ids.users.push(admin.id);
+  const staff=await prisma.user.create({data:{name:prefix+'staff',email:prefix+'staff@example.test',passwordHash:'test',role:'STAFF'}});ids.users.push(staff.id);
+  const token=u=>jwt.sign({id:u.id,tokenType:'access'},process.env.JWT_SECRET);
+  async function request(path,method='GET',body,user=admin,expected=200){const r=await fetch(base+path,{method,headers:{Authorization:'Bearer '+token(user),'Content-Type':'application/json'},...(body&&{body:JSON.stringify(body)})});const data=await r.json();assert.equal(r.status,expected,JSON.stringify(data));return data;}
+  const login = await request('/auth/login', 'POST', { email: admin.email, password: 'TestPass123!' });
+  assert.equal(login.user.role, 'ADMIN'); assert.ok(login.accessToken); assert.ok(login.refreshToken);
+  assert.equal((await request('/auth/profile')).user.id, admin.id);
+  assert.equal((await request('/auth/me')).user.id, admin.id);
+  assert.ok((await request('/auth/refresh', 'POST', { refreshToken: login.refreshToken })).accessToken);
+  await request('/auth/login', 'POST', { email: admin.email, password: 'wrong' }, admin, 401);
+  await request('/auth/setup', 'POST', { name: 'Test', email: 'setup@example.test', password: 'TestPass123!' }, admin, 403);
+  const product=(await request('/products','POST',{name:prefix,sku:prefix,price:100,costPrice:60,stockQuantity:10,lowStockThreshold:2},admin,201)).product; ids.products.push(product.id);
+  assert.equal((await request('/products?search='+prefix)).products.length,1);
+  await request('/products','POST',{name:'forbidden'},staff,403);
+  await request('/settings','PUT',{},staff,403);
+  const customer=await prisma.customer.create({data:{name:prefix}});ids.customers.push(customer.id);
+  const config=await request('/settings');
+  const sale=(await request('/sales','POST',{items:[{productId:product.id,quantity:2}],customerId:customer.id,paymentMethod:'CARD',discount:10,taxRate:config.taxRate},staff,201)).sale;ids.sales.push(sale.id);
+  assert.equal(sale.netAmount,190+Math.round(190*config.taxRate)/100); assert.equal(sale.paymentMethod,'CARD');assert.equal(sale.items[0].costPrice,60);
+  assert.equal((await request('/products/'+product.id)).product.stockQuantity,8);
+  assert.equal((await request('/customers/'+customer.id+'/history')).sales.length,1);
+  await request('/sales','POST',{items:[{productId:product.id,quantity:-1}]},staff,400);
+  await request('/sales','POST',{items:[{productId:product.id,quantity:9}]},staff,409);
+  const cancelResults=await Promise.all([fetch(base+'/sales/'+sale.id+'/cancel',{method:'PUT',headers:{Authorization:'Bearer '+token(admin)}}),fetch(base+'/sales/'+sale.id+'/cancel',{method:'PUT',headers:{Authorization:'Bearer '+token(admin)}})]);
+  assert.deepEqual(cancelResults.map(r=>r.status).sort(),[200,409]);assert.equal((await request('/products/'+product.id)).product.stockQuantity,10);
+  const supplier=await prisma.supplier.create({data:{name:prefix}});ids.suppliers.push(supplier.id);
+  const purchase=(await request('/purchases','POST',{supplierId:supplier.id,items:[{productId:product.id,quantity:5,unitCost:55}]},admin,201)).purchase;ids.purchases.push(purchase.id);
+  await request('/purchases/'+purchase.id,'PUT',{status:'RECEIVED'});await request('/purchases/'+purchase.id,'PUT',{status:'RECEIVED'},admin,409);
+  assert.equal((await request('/products/'+product.id)).product.stockQuantity,15);
+  await request('/products/'+product.id+'/stock','POST',{type:'DAMAGED',quantity:2,reason:'Test damaged stock'});
+  assert.equal((await request('/products/'+product.id)).product.stockQuantity,13);
+  await request('/products/'+product.id+'/stock','POST',{type:'ADJUSTMENT',quantity:1,reason:'Concurrency test'});
+  const concurrent=await Promise.all([1,2].map(()=>fetch(base+'/sales',{method:'POST',headers:{Authorization:'Bearer '+token(staff),'Content-Type':'application/json'},body:JSON.stringify({items:[{productId:product.id,quantity:1}],paymentMethod:'CARD'})})));
+  for(const r of concurrent){const body=await r.json();if(body.sale)ids.sales.push(body.sale.id);}assert.deepEqual(concurrent.map(r=>r.status).sort(),[201,409]);assert.equal((await request('/products/'+product.id)).product.stockQuantity,0);
+  assert.ok((await request('/analytics')).summary);assert.ok((await request('/notifications')).notifications.some(n=>n.id===product.id));assert.ok((await request('/activity?search='+encodeURIComponent(prefix))).activities.length);
+  const reset='test-token-'+randomUUID(); await prisma.user.update({where:{id:admin.id},data:{resetTokenHash:createHash('sha256').update(reset).digest('hex'),resetExpiresAt:new Date(Date.now()+60000)}});
+  await request('/auth/recover-password','POST',{token:reset,password:'ChangedPass123!'});await request('/auth/recover-password','POST',{token:reset,password:'ChangedPass123!'},admin,400);
+  console.log('PASS: products, roles, sales totals, customer history, negative stock rejection, concurrent cancellation, purchase receiving, damaged stock, concurrent checkout, analytics, notifications, activity and single-use recovery.');
+ } finally {
+  await prisma.stockMovement.deleteMany({where:{productId:{in:ids.products}}});
+  await prisma.sale.deleteMany({where:{id:{in:ids.sales}}});
+  await prisma.purchase.deleteMany({where:{id:{in:ids.purchases}}});
+  await prisma.product.deleteMany({where:{id:{in:ids.products}}});
+  await prisma.supplier.deleteMany({where:{id:{in:ids.suppliers}}});
+  await prisma.customer.deleteMany({where:{id:{in:ids.customers}}});
+  await prisma.activity.deleteMany({where:{userId:{in:ids.users}}});
+  await prisma.user.deleteMany({where:{id:{in:ids.users}}});
+  await prisma.$disconnect();if(server)server.close();
+ }
+})().catch(e=>{console.error(e);process.exitCode=1;});

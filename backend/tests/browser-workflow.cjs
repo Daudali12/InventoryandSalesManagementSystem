@@ -1,0 +1,18 @@
+require('dotenv').config();
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const jwt = require('jsonwebtoken');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('crypto');
+const { prisma } = require('../config/db');
+(async()=>{let browser, product, sale, actor;try{
+ actor=await prisma.user.create({data:{name:'Browser verification',email:`browser-${randomUUID()}@example.test`,passwordHash:await require('bcryptjs').hash('BrowserTest123!',4),role:'ADMIN'}});
+ product=await prisma.product.create({data:{name:'Browser test item',sku:randomUUID(),price:100,costPrice:60,stockQuantity:3}});
+ browser=await chromium.launch({headless:true,channel:'chrome'});const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('response',async r=>{if(r.url().includes('/api/')&&r.status()>=400)console.log('API failure',r.status(),r.url(),(await r.json()).message);});page.on('pageerror',e=>console.log('Page error',e.message));
+ await page.goto('http://localhost:5000/login');await page.getByLabel('Email Address',{exact:false}).fill(actor.email);await page.getByLabel('Password',{exact:true}).fill('BrowserTest123!');await page.locator('form').getByRole('button',{name:/Sign In/i}).click();await page.waitForURL('**/dashboard',{waitUntil:'domcontentloaded',timeout:10000}).catch(async e=>{console.log('Login screen:',await page.locator('body').innerText());throw e;});await page.getByRole('heading',{name:'Business dashboard'}).waitFor();
+ await page.goto('http://localhost:5000/pos');await page.getByRole('heading',{name:'Browser test item',exact:true}).click();await page.getByRole('radio',{name:'Card',exact:true}).click();await page.getByRole('button',{name:/Complete Order/}).click();await page.getByText('Payment Completed',{exact:true}).waitFor();
+ sale=await prisma.sale.findFirst({where:{userId:actor.id},include:{items:true}});assert.ok(sale);assert.equal(sale.paymentMethod,'CARD');assert.equal((await prisma.product.findUnique({where:{id:product.id}})).stockQuantity,2);
+ await page.goto(`http://localhost:5000/receipt/${sale.id}`);await page.getByRole('heading',{name:sale.invoiceNumber}).waitFor();const download=page.waitForEvent('download');await page.getByRole('button',{name:'PDF',exact:true}).click();const file=await download;assert.ok(file.suggestedFilename().endsWith('.pdf'));
+ await page.goto('http://localhost:5000/reports');await page.getByRole('button',{name:'Sales Excel',exact:true}).waitFor();const excel=page.waitForEvent('download');await page.getByRole('button',{name:'Sales Excel',exact:true}).click();assert.ok((await excel).suggestedFilename().endsWith('.xlsx'));
+ await page.setViewportSize({width:390,height:844});await page.goto('http://localhost:5000/pos');await page.getByRole('heading',{name:'Browser test item',exact:true}).waitFor();const box=await page.getByRole('heading',{name:'Browser test item',exact:true}).boundingBox();assert.ok(box&&box.height>0&&box.y<700);assert.ok(await page.evaluate(()=>document.body.scrollWidth<=window.innerWidth));
+ console.log('PASS: browser login, POS card checkout, stock deduction, receipt PDF, sales Excel download and visible mobile catalog.');
+}finally{await browser?.close();if(actor){await prisma.stockMovement.deleteMany({where:{userId:actor.id}});await prisma.sale.deleteMany({where:{userId:actor.id}});await prisma.activity.deleteMany({where:{userId:actor.id}});}if(product)await prisma.product.delete({where:{id:product.id}});if(actor)await prisma.user.delete({where:{id:actor.id}});await prisma.$disconnect();}})().catch(e=>{console.error(e);process.exitCode=1;});

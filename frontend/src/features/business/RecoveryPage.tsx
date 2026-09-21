@@ -1,0 +1,6 @@
+import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, handleApiError } from '@/lib/api';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+export function RecoveryPage(){const [params]=useSearchParams(),token=params.get('token');const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);const submit=async(e:React.FormEvent)=>{e.preventDefault();setBusy(true);try{const r=await api.post(token?'/auth/recover-password':'/auth/forgot-password',token?{token,password}:{email});setMessage(r.data.message);}catch(e){setMessage(handleApiError(e));}finally{setBusy(false);}};return <form onSubmit={submit} className="p-6 space-y-4"><h1 className="text-xl font-bold">{token?'Reset password':'Forgot password'}</h1>{token?<Input label="New password" type="password" minLength={8} required value={password} onChange={e=>setPassword(e.target.value)}/>:<Input label="Account email" type="email" required value={email} onChange={e=>setEmail(e.target.value)}/>}<Button type="submit" isLoading={busy}>{token?'Set password':'Send reset link'}</Button>{message&&<p role="status">{message}</p>}<Link className="block text-indigo-600" to="/login">Back to sign in</Link></form>}
