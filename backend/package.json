@@ -10,7 +10,8 @@
     "test": "node --test tests/domain.test.js tests/cors.test.js",
     "test:integration": "node tests/integration.js",
     "db:setup": "prisma db push",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "schema": "utils/prisma/schema.prisma",
