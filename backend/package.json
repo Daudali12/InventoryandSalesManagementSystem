@@ -7,7 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "seed": "node utils/prisma/seed.js",
-    "test": "node --test tests/domain.test.js",
+    "test": "node --test tests/domain.test.js tests/cors.test.js",
     "test:integration": "node tests/integration.js",
     "db:setup": "prisma db push",
     "db:generate": "prisma generate"

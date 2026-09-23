@@ -17,49 +17,12 @@ import { CustomersPage } from "@/features/customers/CustomersPage";
 import { SettingsPage } from "@/features/business/AdminPages";
 import { ProfilePage } from "@/features/profile/ProfilePage";
 import { useAuthStore } from "@/store/authStore";
-import { useEffect } from "react";
-import { authApi } from "@/features/auth/api";
+import { SessionGate } from "@/features/auth/SessionGate";
 import { isAuthUser } from "@/features/auth/response";
 
 function ProtectedRoute({ children, admin = false, owner = false }: { children: React.ReactNode; admin?: boolean; owner?: boolean }) {
   const user = useAuthStore(s => s.user);
-  const { isAuthenticated, isLoading, setAuth, setLoading } = useAuthStore();
-
-  useEffect(() => {
-    const initAuth = async () => {
-      const token = localStorage.getItem("auth-storage");
-      if (token) {
-        try {
-          const parsed = JSON.parse(token);
-          if (parsed.state?.accessToken) {
-            const user = await authApi.getProfile();
-            const currentSession = useAuthStore.getState();
-            if (currentSession.accessToken && currentSession.refreshToken) {
-              setAuth(user, currentSession.accessToken, currentSession.refreshToken);
-            } else {
-              currentSession.logout();
-            }
-          } else {
-            useAuthStore.getState().logout();
-          }
-        } catch {
-          useAuthStore.getState().logout();
-          setLoading(false);
-        }
-      } else {
-        useAuthStore.getState().logout();
-      }
-    };
-    initAuth();
-  }, [setAuth, setLoading]);
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
-  }
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated);
 
   if (!isAuthenticated || !isAuthUser(user)) {
     return <Navigate to="/login" replace />;
@@ -72,11 +35,11 @@ function ProtectedRoute({ children, admin = false, owner = false }: { children: 
 import { Navigate } from "react-router-dom";
 
 export const router = createBrowserRouter([
-  { path: "/receipt/:id", element: <ProtectedRoute><ReceiptPage /></ProtectedRoute> },
+  { path: "/receipt/:id", element: <SessionGate><ProtectedRoute><ReceiptPage /></ProtectedRoute></SessionGate> },
   { path: "/reset-password", element: <AuthLayout><RecoveryPage /></AuthLayout> },
   {
     path: "/",
-    element: <Layout />,
+    element: <SessionGate><Layout /></SessionGate>,
     children: [
       { path: "activity", element: <ProtectedRoute admin><ActivityPage /></ProtectedRoute> },
       {

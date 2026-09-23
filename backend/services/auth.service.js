@@ -44,6 +44,24 @@ const register = async ({ name, email, password }, requester = null) => {
   return { ...generateTokens(user), token: undefined, user: publicUser(user) };
 };
 
+// Public registration always creates a normal account, regardless of submitted role.
+const signup = async ({ name, email, password }) => {
+  const userName = typeof name === 'string' ? name.trim() : '';
+  const userEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!userName || userName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail) || userEmail.length > 254 || typeof password !== 'string' || password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
+    throw { status: 400, message: 'Enter your name, a valid email, and a password of at least 8 characters (maximum 72 bytes).' };
+  }
+  try {
+    const user = await prisma.user.create({ data: {
+      name: userName, email: userEmail, passwordHash: await bcrypt.hash(password, 12), role: 'STAFF',
+    } });
+    return { ...generateTokens(user), user: publicUser(user) };
+  } catch (error) {
+    if (error.code === 'P2002') throw { status: 409, message: 'An account with this email already exists. Please sign in.' };
+    throw error;
+  }
+};
+
 const loginUser = async (email, password) => {
   const userEmail = (email || '').trim().toLowerCase();
   const userPassword = (password || '').toString();
@@ -86,4 +104,4 @@ const getProfile = async (userId) => {
   return user;
 };
 
-module.exports = { register, login: loginUser, loginUser, resetUserPassword, refreshToken, getProfile };
+module.exports = { signup, register, login: loginUser, loginUser, resetUserPassword, refreshToken, getProfile };

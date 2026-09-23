@@ -1,103 +1,80 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { getAuthStore } from "@/store/authStore";
+import { parseTokenResponse } from "@/features/auth/response";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
-
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers: { "Content-Type": "application/json" },
   timeout: 30000,
 });
 
-api.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
-    const token = getAuthStore().accessToken;
-    if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
+type SessionRequest = InternalAxiosRequestConfig & { _retry?: boolean; _sessionVersion?: number };
+const publicAuth = /\/auth\/(login|signup|setup|refresh|forgot-password|recover-password|logout)(?:\?|$)/;
 
-let isRefreshing = false;
-let failedQueue: Array<{
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-}> = [];
+api.interceptors.request.use((config: SessionRequest) => {
+  const session = getAuthStore();
+  config._sessionVersion = session.sessionVersion;
+  if (session.accessToken && !publicAuth.test(config.url || "")) {
+    config.headers.Authorization = `Bearer ${session.accessToken}`;
+  }
+  return config;
+});
 
-const processQueue = (error: Error | null, token: string | null = null) => {
-  failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve(token);
-    }
-  });
-  failedQueue = [];
-};
+let refreshing: { version: number; promise: Promise<string> } | null = null;
 
-api.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
-
-    if (error.response?.status === 401 && originalRequest && !originalRequest.url?.includes("/auth/") && !originalRequest._retry) {
-      if (isRefreshing) {
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-          .then((token) => {
-            if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${token}`;
-            }
-            return api(originalRequest);
-          })
-          .catch((err) => Promise.reject(err));
-      }
-
-      originalRequest._retry = true;
-      isRefreshing = true;
-
-      try {
-        const refreshToken = getAuthStore().refreshToken;
-        if (!refreshToken) {
-          throw new Error("No refresh token");
-        }
-
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
-        const { accessToken, refreshToken: newRefreshToken } = response.data;
-
-        getAuthStore().setTokens(accessToken, newRefreshToken);
-
-        if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${accessToken}`;
-        }
-
-        processQueue(null, accessToken);
-        return api(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError as Error, null);
+function renewSession(version: number): Promise<string> {
+  if (refreshing?.version === version) return refreshing.promise;
+  const refreshToken = getAuthStore().refreshToken;
+  const promise = (async () => {
+    try {
+      if (!refreshToken) throw new Error("Your session has ended. Please sign in again.");
+      const response = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken }, { timeout: 30000 });
+      const tokens = parseTokenResponse(response.data);
+      if (getAuthStore().sessionVersion !== version) throw new Error("Session changed during authentication.");
+      getAuthStore().setTokens(tokens.accessToken, tokens.refreshToken);
+      return tokens.accessToken;
+    } catch (error) {
+      // An offline server is not evidence that the user's credentials are invalid.
+      if (getAuthStore().sessionVersion === version &&
+          (!refreshToken || (axios.isAxiosError(error) && [400, 401, 403].includes(error.response?.status || 0)))) {
         getAuthStore().logout();
-        window.location.href = "/login";
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
       }
+      throw error;
+    } finally {
+      if (refreshing?.version === version) refreshing = null;
     }
+  })();
+  refreshing = { version, promise };
+  return promise;
+}
 
+api.interceptors.response.use(response => response, async (error: AxiosError) => {
+  const request = error.config as SessionRequest | undefined;
+  if (!request || error.response?.status !== 401 || publicAuth.test(request.url || "")) return Promise.reject(error);
+  const session = getAuthStore();
+  if (request._sessionVersion !== session.sessionVersion) return Promise.reject(error);
+  if (request._retry) {
+    session.logout();
     return Promise.reject(error);
   }
-);
+  request._retry = true;
+  // Another concurrent request may already have renewed this token.
+  const currentAuthorization = session.accessToken ? `Bearer ${session.accessToken}` : undefined;
+  if (currentAuthorization && request.headers.Authorization !== currentAuthorization) {
+    request.headers.Authorization = currentAuthorization;
+  } else {
+    const accessToken = await renewSession(session.sessionVersion);
+    request.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  if (getAuthStore().sessionVersion !== request._sessionVersion) return Promise.reject(error);
+  return api(request);
+});
 
 export const handleApiError = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
-    return error.response?.data?.message || error.message || "An error occurred";
+    if (!error.response) return "Cannot connect to the server. Check your connection and try again.";
+    return error.response.data?.message || error.message || "An error occurred";
   }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "An unexpected error occurred";
+  return error instanceof Error ? error.message : "An unexpected error occurred";
 };

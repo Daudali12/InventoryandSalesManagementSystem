@@ -2,6 +2,11 @@ const authService = require('../services/auth.service');
 const { prisma } = require('../config/db');
 const bcrypt = require('bcryptjs');
 
+const handleSignup = async (req, res, next) => {
+  try { res.status(201).json({ success: true, ...await authService.signup(req.body) }); }
+  catch (error) { next(error); }
+};
+
 const handleLogin = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -54,4 +59,4 @@ const handleUpdateProfile = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-module.exports = { handleLogin, handleGetProfile, handleRegister, handleSetup, handleRefresh, handleResetPassword, handleUpdateProfile };
+module.exports = { handleSignup, handleLogin, handleGetProfile, handleRegister, handleSetup, handleRefresh, handleResetPassword, handleUpdateProfile };

@@ -3,6 +3,11 @@ import type { LoginCredentials, RegisterData, AuthResponse, User } from "@/types
 import { parseAuthResponse, parseProfileResponse } from "./response";
 
 export const authApi = {
+  signup: async (data: RegisterData): Promise<AuthResponse> => {
+    const response = await api.post('/auth/signup', data);
+    return parseAuthResponse(response.data);
+  },
+
   login: async (credentials: LoginCredentials): Promise<AuthResponse> => {
     const response = await api.post("/auth/login", credentials);
     return parseAuthResponse(response.data);

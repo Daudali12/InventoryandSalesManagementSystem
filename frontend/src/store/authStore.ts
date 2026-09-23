@@ -9,6 +9,8 @@ interface AuthState {
   refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  sessionVersion: number;
+  setVerifiedUser: (user: User) => void;
   setAuth: (user: User, accessToken: string, refreshToken: string) => void;
   setTokens: (accessToken: string, refreshToken: string) => void;
   setUser: (user: User) => void;
@@ -25,6 +27,7 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       isAuthenticated: false,
       isLoading: true,
+      sessionVersion: 0,
 
       setAuth: (user, accessToken, refreshToken) => {
         if (!isAuthUser(user) || !accessToken || !refreshToken) {
@@ -32,6 +35,7 @@ export const useAuthStore = create<AuthState>()(
           throw new Error("Your login session is incomplete. Please sign in again.");
         }
         set({
+          sessionVersion: get().sessionVersion + 1,
           user,
           accessToken,
           refreshToken,
@@ -43,10 +47,15 @@ export const useAuthStore = create<AuthState>()(
       setTokens: (accessToken, refreshToken) =>
         set({ accessToken, refreshToken }),
 
-      setUser: (user) => set({ user }),
+      setUser: (user) => { if (isAuthUser(user)) set({ user }); },
+      setVerifiedUser: (user) => {
+        if (!isAuthUser(user)) throw new Error("Your session could not be verified.");
+        set({ user, isAuthenticated: true, isLoading: false });
+      },
 
       logout: () =>
         set({
+          sessionVersion: get().sessionVersion + 1,
           user: null,
           accessToken: null,
           refreshToken: null,

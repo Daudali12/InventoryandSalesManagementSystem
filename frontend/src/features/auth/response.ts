@@ -29,3 +29,13 @@ export function parseProfileResponse(value: unknown): User {
   if (!isAuthUser(user)) throw new Error("Your session could not be verified. Please sign in again.");
   return user;
 }
+
+export function parseTokenResponse(value: unknown): Pick<AuthResponse, "accessToken" | "refreshToken"> {
+  const envelope = record(value);
+  const data = envelope.data === undefined ? envelope : record(envelope.data);
+  if (typeof data.accessToken !== "string" || !data.accessToken ||
+      typeof data.refreshToken !== "string" || !data.refreshToken) {
+    throw new Error("The server could not renew your session. Please sign in again.");
+  }
+  return { accessToken: data.accessToken, refreshToken: data.refreshToken };
+}

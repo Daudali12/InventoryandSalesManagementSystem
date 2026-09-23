@@ -3,6 +3,7 @@ const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const { verifyToken, optionalAuthenticate } = require('../middleware/auth.middleware');
 
+router.post('/signup', authController.handleSignup);
 router.post('/login', authController.handleLogin);
 router.post('/setup', authController.handleSetup);
 router.post('/register', optionalAuthenticate, authController.handleRegister);

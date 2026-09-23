@@ -8,7 +8,7 @@ const filename = path.resolve(__dirname, '../src/features/auth/response.ts');
 const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } });
 const responseModule = new Module(filename, module);
 responseModule._compile(compiled.outputText, filename);
-const { parseAuthResponse, parseProfileResponse } = responseModule.exports;
+const { parseAuthResponse, parseProfileResponse, parseTokenResponse } = responseModule.exports;
 const user = { id: 'test-id', name: 'Test user', email: 'test@example.test', role: 'ADMIN' };
 const session = { user, accessToken: 'access', refreshToken: 'refresh' };
 
@@ -29,4 +29,9 @@ test('rejects incomplete authentication before it reaches the role selector or s
 test('profile accepts current and legacy envelopes, but rejects missing users', () => {
   for (const value of [{ user }, { data: user }, { data: { user } }]) assert.deepEqual(parseProfileResponse(value), user);
   assert.throws(() => parseProfileResponse({ success: true }), /session could not be verified/);
+});
+
+test('refresh validates both tokens before replacing a working session', () => {
+  assert.deepEqual(parseTokenResponse({data:{accessToken:'next-access',refreshToken:'next-refresh'}}), {accessToken:'next-access',refreshToken:'next-refresh'});
+  for (const value of [null, {}, {accessToken:'only-access'}, {accessToken:'',refreshToken:'refresh'}]) assert.throws(() => parseTokenResponse(value), /renew your session/);
 });
